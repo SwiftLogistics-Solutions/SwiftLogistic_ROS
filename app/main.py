@@ -1,5 +1,20 @@
-from fastapi import FastAPI, Path
+from fastapi import FastAPI, Path, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel
+from motor.motor_asyncio import AsyncIOMotorClient
+from datetime import datetime
+import os
+from dotenv import load_dotenv
+import math
+import heapq
+
+# Pydantic models
+class OrderAcceptRequest(BaseModel):
+    order_id: str
+    driver_id: str
+
+# Load environment variables
+load_dotenv()
 
 # Create simple FastAPI application
 app = FastAPI(
@@ -7,6 +22,18 @@ app = FastAPI(
     description="Simple API for driver order acceptance and route optimization",
     version="1.0.0"
 )
+
+# MongoDB connection
+MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+DATABASE_NAME = "Middleware"
+
+# Initialize MongoDB client
+client = AsyncIOMotorClient(MONGO_URI)
+db = client[DATABASE_NAME]
+
+# Collections
+drivers_collection = db.drivers
+orders_collection = db.orders
 
 # Add CORS middleware
 app.add_middleware(
@@ -17,76 +44,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Hardcoded test data
+# Hardcoded WMS location (as requested)
 WMS_LOCATION = {
     "address": "123 Warehouse Street, Colombo 07",
     "latitude": 6.9271,
     "longitude": 79.8612
-}
-
-DRIVERS = {
-    "D001": {
-        "driver_id": "D001",
-        "name": "Sunil Perera",
-        "phone": "+94771234567",
-        "current_location": {
-            "address": "456 Driver Street, Colombo 03",
-            "latitude": 6.9147,
-            "longitude": 79.8731
-        }
-    },
-    "D002": {
-        "driver_id": "D002", 
-        "name": "Kamala Gunasekara",
-        "phone": "+94771234568",
-        "current_location": {
-            "address": "789 Driver Avenue, Kandy",
-            "latitude": 7.2906,
-            "longitude": 80.6337
-        }
-    }
-}
-
-ORDERS = {
-    "O001": {
-        "order_id": "O001",
-        "customer_name": "Nimal Rajapaksa",
-        "customer_phone": "+94711234567",
-        "delivery_address": {
-            "address": "101 Customer Lane, Galle",
-            "latitude": 6.0535,
-            "longitude": 80.2210
-        },
-        "priority": "high",
-        "status": "pending",
-        "accepted_by_driver": None
-    },
-    "O002": {
-        "order_id": "O002",
-        "customer_name": "Saman Kumara",  
-        "customer_phone": "+94711234568",
-        "delivery_address": {
-            "address": "202 Customer Road, Negombo",
-            "latitude": 7.2083,
-            "longitude": 79.8358
-        },
-        "priority": "low",
-        "status": "pending", 
-        "accepted_by_driver": None
-    },
-    "O003": {
-        "order_id": "O003",
-        "customer_name": "Priyanka Wickramasinghe",
-        "customer_phone": "+94711234569", 
-        "delivery_address": {
-            "address": "303 Customer Plaza, Kandy",
-            "latitude": 7.2906,
-            "longitude": 80.6337
-        },
-        "priority": "high",
-        "status": "pending",
-        "accepted_by_driver": None
-    }
 }
 
 def calculate_distance(lat1, lng1, lat2, lng2):
@@ -297,42 +259,52 @@ async def root():
     """Root endpoint"""
     return {"message": "SwiftTrack Route Optimization System", "status": "running"}
 
-@app.post("/orders/accept/{order_id}/{driver_id}")
-async def accept_order(
-    order_id: str = Path(..., description="Order ID to accept"),
-    driver_id: str = Path(..., description="Driver ID accepting the order")
-):
-    """Driver accepts a particular order"""
+@app.post("/orders/accept")
+async def accept_order(request: OrderAcceptRequest):
+    """Accept an order and assign it to a driver"""
+    order_id = request.order_id
+    driver_id = request.driver_id
     
     # Check if order exists
-    if order_id not in ORDERS:
-        return {"error": "Order not found", "order_id": order_id}
+    order = await orders_collection.find_one({"order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
     
-    # Check if driver exists  
-    if driver_id not in DRIVERS:
-        return {"error": "Driver not found", "driver_id": driver_id}
+    # Check if driver exists
+    driver = await drivers_collection.find_one({"driver_id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
     
-    # Check if order is already accepted
-    if ORDERS[order_id]["accepted_by_driver"] is not None:
-        return {
-            "error": "Order already accepted", 
-            "order_id": order_id,
-            "accepted_by": ORDERS[order_id]["accepted_by_driver"]
-        }
+    # Check if order is already assigned
+    if order["status"] != "pending":
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is already {order['status']}")
     
-    # Accept the order
-    ORDERS[order_id]["accepted_by_driver"] = driver_id
-    ORDERS[order_id]["status"] = "accepted"
+    # Update order status and assign to driver
+    await orders_collection.update_one(
+        {"order_id": order_id},
+        {"$set": {"status": "accepted", "driver_id": driver_id}}
+    )
+    
+    # Add order to driver's assignments
+    await drivers_collection.update_one(
+        {"driver_id": driver_id},
+        {"$addToSet": {"assigned_orders": order_id}}
+    )
+    
+    # Get updated data
+    updated_order = await orders_collection.find_one({"order_id": order_id})
     
     return {
-        "message": "Order accepted successfully",
-        "order_id": order_id,
-        "driver_id": driver_id,
-        "driver_name": DRIVERS[driver_id]["name"],
-        "customer_name": ORDERS[order_id]["customer_name"],
-        "delivery_address": ORDERS[order_id]["delivery_address"]["address"],
-        "priority": ORDERS[order_id]["priority"],
-        "status": ORDERS[order_id]["status"]
+        "message": f"Order {order_id} successfully accepted by driver {driver_id}",
+        "order": {
+            "order_id": updated_order["order_id"],
+            "customer_name": updated_order["customer_name"],
+            "delivery_address": updated_order["delivery_address"],
+            "priority": updated_order["priority"],
+            "status": updated_order["status"],
+            "driver_id": updated_order["driver_id"]
+        },
+        "driver": driver["name"]
     }
 
 @app.get("/routes/optimize/{driver_id}")
@@ -340,17 +312,16 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
     """Optimizes the best route for the driver"""
     
     # Check if driver exists
-    if driver_id not in DRIVERS:
+    driver = await drivers_collection.find_one({"driver_id": driver_id})
+    if not driver:
         return {"error": "Driver not found", "driver_id": driver_id}
     
-    # Get driver info
-    driver = DRIVERS[driver_id]
-    
     # Get orders accepted by this driver
-    driver_orders = []
-    for order_id, order in ORDERS.items():
-        if order["accepted_by_driver"] == driver_id:
-            driver_orders.append(order)
+    driver_orders_cursor = orders_collection.find({
+        "driver_id": driver_id,
+        "status": "accepted"
+    })
+    driver_orders = await driver_orders_cursor.to_list(length=None)
     
     if not driver_orders:
         return {
