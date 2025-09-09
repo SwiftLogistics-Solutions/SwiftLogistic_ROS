@@ -13,6 +13,15 @@ class OrderAcceptRequest(BaseModel):
     order_id: str
     driver_id: str
 
+class OrderDeliveryRequest(BaseModel):
+    order_id: str
+    driver_id: str
+    delivery_proof: str = None
+
+class OrderOnDeliveryRequest(BaseModel):
+    order_id: str
+    driver_id: str
+
 # Load environment variables
 load_dotenv()
 
@@ -185,10 +194,10 @@ def build_weighted_graph(driver_orders, driver_location, wms_location):
     
     return graph, locations
 
-def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location):
+def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, orders_to_pickup=None):
     """
     Use Dijkstra's algorithm to find optimal delivery route
-    Route: Driver Location → WMS (pickup orders) → Optimized deliveries → Return to WMS
+    Route: Driver Location → [WMS (pickup orders if any)] → Optimized deliveries → [Return to WMS if pickup was done]
     """
     if not driver_orders:
         return [], 0, []
@@ -196,19 +205,23 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location):
     # Build weighted graph
     graph, locations = build_weighted_graph(driver_orders, driver_location, wms_location)
     
-    # Route: Driver → WMS (pickup) → Orders → WMS (return)
+    # Route starts with driver
     route = ['driver']
     total_weighted_distance = 0
     total_physical_distance = 0
     current_node = 'driver'
     
-    # First, go to WMS to pickup orders
-    route.append('wms')
-    lat1, lng1 = locations['driver']
-    lat2, lng2 = locations['wms']
-    pickup_distance = calculate_distance(lat1, lng1, lat2, lng2)
-    total_physical_distance += pickup_distance
-    current_node = 'wms'
+    # Only go to WMS if there are orders to pickup
+    need_pickup = orders_to_pickup and len(orders_to_pickup) > 0
+    
+    if need_pickup:
+        # First, go to WMS to pickup orders
+        route.append('wms')
+        lat1, lng1 = locations['driver']
+        lat2, lng2 = locations['wms']
+        pickup_distance = calculate_distance(lat1, lng1, lat2, lng2)
+        total_physical_distance += pickup_distance
+        current_node = 'wms'
     
     # Now optimize delivery sequence using Dijkstra's
     unvisited_orders = [order["order_id"] for order in driver_orders]
@@ -240,8 +253,8 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location):
             current_node = best_order
             unvisited_orders.remove(best_order)
     
-    # Return to WMS
-    if current_node != 'wms':
+    # Return to WMS only if we went there for pickup
+    if need_pickup and current_node != 'wms':
         route.append('wms')
         weight = graph[current_node]['wms']
         total_weighted_distance += weight
@@ -316,14 +329,18 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
     if not driver:
         return {"error": "Driver not found", "driver_id": driver_id}
     
-    # Get orders accepted by this driver
+    # Get orders assigned to this driver (accepted or on_delivery)
     driver_orders_cursor = orders_collection.find({
         "driver_id": driver_id,
-        "status": "accepted"
+        "status": {"$in": ["accepted", "on_delivery"]}
     })
-    driver_orders = await driver_orders_cursor.to_list(length=None)
+    all_driver_orders = await driver_orders_cursor.to_list(length=None)
     
-    if not driver_orders:
+    # Separate orders by status
+    orders_to_pickup = [order for order in all_driver_orders if order["status"] == "accepted"]
+    orders_on_delivery = [order for order in all_driver_orders if order["status"] == "on_delivery"]
+    
+    if not all_driver_orders:
         return {
             "message": "No orders assigned to driver",
             "driver_id": driver_id,
@@ -331,9 +348,12 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
             "route": []
         }
     
+    # Use only orders that need delivery for route optimization
+    driver_orders = all_driver_orders
+    
     # Use Dijkstra's algorithm to optimize route
     optimal_route, total_distance, locations = optimize_route_with_dijkstra(
-        driver_orders, driver["current_location"], WMS_LOCATION
+        driver_orders, driver["current_location"], WMS_LOCATION, orders_to_pickup
     )
     
     # Build route points from optimal route
@@ -366,7 +386,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
                     "type": "pickup",
                     "coordinates": {"latitude": coords[0], "longitude": coords[1]},
                     "distance_from_previous": round(distance, 2),
-                    "orders_to_pickup": [order["order_id"] for order in driver_orders]
+                    "orders_to_pickup": [order["order_id"] for order in orders_to_pickup]
                 })
             else:  # Final stop = return to warehouse
                 route_points.append({
@@ -391,6 +411,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
                     "customer_name": order["customer_name"],
                     "customer_phone": order["customer_phone"],
                     "priority": order["priority"],
+                    "status": order["status"],
                     "coordinates": {"latitude": coords[0], "longitude": coords[1]},
                     "priority_weight_applied": "Yes" if order["priority"] == "high" else "No"
                 })
@@ -406,6 +427,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
                     "customer_name": order["customer_name"],
                     "customer_phone": order["customer_phone"],
                     "priority": order["priority"],
+                    "status": order["status"],
                     "coordinates": {"latitude": coords[0], "longitude": coords[1]},
                     "distance_from_previous": round(distance, 2),
                     "priority_weight_applied": "Yes" if order["priority"] == "high" else "No"
@@ -420,7 +442,128 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
         "driver_id": driver_id,
         "driver_name": driver["name"],
         "total_orders": len(driver_orders),
+        "orders_to_pickup": len(orders_to_pickup),
+        "orders_on_delivery": len(orders_on_delivery),
+        "warehouse_visit_required": len(orders_to_pickup) > 0,
         "total_distance_km": round(total_distance, 2),
         "estimated_time_minutes": estimated_time_minutes,
         "route": route_points
+    }
+
+@app.post("/orders/on-delivery")
+async def mark_order_on_delivery(request: OrderOnDeliveryRequest):
+    """Mark an order as on delivery (picked up from warehouse, en route to customer)"""
+    order_id = request.order_id
+    driver_id = request.driver_id
+    
+    # Check if order exists
+    order = await orders_collection.find_one({"order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+    
+    # Check if driver exists
+    driver = await drivers_collection.find_one({"driver_id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+    
+    # Check if order is assigned to this driver
+    if order.get("driver_id") != driver_id:
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not assigned to driver {driver_id}")
+    
+    # Check if order is in accepted status
+    if order["status"] != "accepted":
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in accepted status. Current status: {order['status']}")
+    
+    # Update order status to on_delivery
+    await orders_collection.update_one(
+        {"order_id": order_id},
+        {"$set": {
+            "status": "on_delivery",
+            "picked_up_at": datetime.utcnow(),
+            "picked_up_by": driver_id
+        }}
+    )
+    
+    # Get updated order data
+    updated_order = await orders_collection.find_one({"order_id": order_id})
+    
+    return {
+        "message": f"Order {order_id} successfully marked as on delivery by driver {driver_id}",
+        "order": {
+            "order_id": updated_order["order_id"],
+            "customer": updated_order["customer_name"],
+            "delivery_address": updated_order["delivery_address"],
+            "priority": updated_order["priority"],
+            "status": updated_order["status"],
+            "driver_id": updated_order["driver_id"],
+            "picked_up_at": updated_order["picked_up_at"].isoformat()
+        },
+        "driver": driver["name"]
+    }
+
+@app.post("/orders/deliver")
+async def mark_order_delivered(request: OrderDeliveryRequest):
+    """Mark an order as delivered"""
+    order_id = request.order_id
+    driver_id = request.driver_id
+    delivery_proof = request.delivery_proof
+    
+    # Check if order exists
+    order = await orders_collection.find_one({"order_id": order_id})
+    if not order:
+        raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+    
+    # Check if driver exists
+    driver = await drivers_collection.find_one({"driver_id": driver_id})
+    if not driver:
+        raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
+    
+    # Check if order is assigned to this driver
+    if order.get("driver_id") != driver_id:
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not assigned to driver {driver_id}")
+    
+    # Check if order is in accepted status
+    if order["status"] != "accepted":
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in accepted status. Current status: {order['status']}")
+    
+    # Update order status to delivered
+    update_data = {
+        "status": "delivered",
+        "delivered_at": datetime.utcnow(),
+        "delivered_by": driver_id
+    }
+    
+    if delivery_proof:
+        update_data["delivery_proof"] = delivery_proof
+    
+    await orders_collection.update_one(
+        {"order_id": order_id},
+        {"$set": update_data}
+    )
+    
+    # Remove order from driver's assigned orders and add to completed
+    await drivers_collection.update_one(
+        {"driver_id": driver_id},
+        {
+            "$pull": {"assigned_orders": order_id},
+            "$addToSet": {"completed_orders": order_id}
+        }
+    )
+    
+    # Get updated order data
+    updated_order = await orders_collection.find_one({"order_id": order_id})
+    
+    return {
+        "message": f"Order {order_id} successfully marked as delivered by driver {driver_id}",
+        "order": {
+            "order_id": updated_order["order_id"],
+            "customer": updated_order["customer_name"],
+            "delivery_address": updated_order["delivery_address"],
+            "priority": updated_order["priority"],
+            "status": updated_order["status"],
+            "driver_id": updated_order["driver_id"],
+            "delivered_at": updated_order["delivered_at"].isoformat(),
+            "delivery_proof": updated_order.get("delivery_proof", "")
+        },
+        "driver": driver["name"]
     }
