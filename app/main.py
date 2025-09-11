@@ -7,6 +7,72 @@ import os
 from dotenv import load_dotenv
 import math
 import heapq
+import json
+import re
+
+# Load district coordinates from JSON file
+def load_district_coordinates():
+    """Load district coordinates from JSON file"""
+    try:
+        with open("district_coordinates.json", "r") as f:
+            data = json.load(f)
+            return data["districts"]
+    except FileNotFoundError:
+        print("Warning: district_coordinates.json not found. Location detection will not work.")
+        return {}
+    except Exception as e:
+        print(f"Error loading district coordinates: {e}")
+        return {}
+
+# Global variable to store district data
+DISTRICT_DATA = load_district_coordinates()
+
+def find_coordinates_by_address(address):
+    """
+    Find coordinates by matching district names or aliases in the address
+    Returns: dict with district info or None if not found
+    """
+    if not DISTRICT_DATA or not address:
+        return None
+    
+    # Convert address to lowercase for case-insensitive matching
+    address_lower = address.lower()
+    
+    # First try to match exact district names
+    for district_name, district_info in DISTRICT_DATA.items():
+        if district_name.lower() in address_lower:
+            return {
+                "district": district_name,
+                "latitude": district_info["latitude"],
+                "longitude": district_info["longitude"],
+                "match_type": "exact_district_name",
+                "matched_term": district_name
+            }
+    
+    # Then try to match aliases
+    for district_name, district_info in DISTRICT_DATA.items():
+        for alias in district_info["aliases"]:
+            # Use word boundary matching to avoid partial matches
+            pattern = r'\b' + re.escape(alias.lower()) + r'\b'
+            if re.search(pattern, address_lower):
+                return {
+                    "district": district_name,
+                    "latitude": district_info["latitude"],
+                    "longitude": district_info["longitude"],
+                    "match_type": "alias",
+                    "matched_term": alias,
+                    "matched_alias": alias
+                }
+    
+    return None
+
+def get_all_districts():
+    """Get list of all available districts"""
+    return list(DISTRICT_DATA.keys()) if DISTRICT_DATA else []
+
+def get_district_info(district_name):
+    """Get detailed info for a specific district"""
+    return DISTRICT_DATA.get(district_name) if DISTRICT_DATA else None
 
 # Pydantic models
 class OrderAcceptRequest(BaseModel):
@@ -22,6 +88,15 @@ class OrderOnDeliveryRequest(BaseModel):
     order_id: str
     driver_id: str
 
+class DriverSignupRequest(BaseModel):
+    firebaseUID: str
+    name: str
+    email: str
+    phone: str
+    address: str
+    latitude: float = None
+    longitude: float = None
+
 # Load environment variables
 load_dotenv()
 
@@ -33,8 +108,8 @@ app = FastAPI(
 )
 
 # MongoDB connection
-MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
-DATABASE_NAME = "Middleware"
+MONGO_URI = os.getenv("MONGO_URI", "mongodb+srv://middleware58_db_user:12345@cluster-1.6ci6iel.mongodb.net/")
+DATABASE_NAME = "ROS"
 
 # Initialize MongoDB client
 client = AsyncIOMotorClient(MONGO_URI)
@@ -271,6 +346,132 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, o
 async def root():
     """Root endpoint"""
     return {"message": "SwiftTrack Route Optimization System", "status": "running"}
+
+@app.get("/districts")
+async def get_districts():
+    """Get available districts for location mapping"""
+    try:
+        districts = get_all_districts()
+        district_details = {}
+        
+        for district in districts:
+            district_info = get_district_info(district)
+            if district_info:
+                district_details[district] = {
+                    "latitude": district_info["latitude"],
+                    "longitude": district_info["longitude"],
+                    "aliases": district_info["aliases"]
+                }
+        
+        return {
+            "message": "Available districts for automatic location detection",
+            "total_districts": len(districts),
+            "districts": district_details,
+            "usage": "Include any of these district names or aliases in your address during driver signup for automatic coordinate detection"
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error fetching districts: {str(e)}")
+
+@app.post("/drivers/signup")
+async def driver_signup(request: DriverSignupRequest):
+    """Register a new driver in MongoDB after Firebase authentication"""
+    try:
+        # Check if driver already exists by firebaseUID
+        existing_driver = await drivers_collection.find_one({"firebaseUID": request.firebaseUID})
+        if existing_driver:
+            raise HTTPException(status_code=400, detail="Driver already exists with this Firebase UID")
+        
+        # Check if driver already exists by email
+        existing_email = await drivers_collection.find_one({"email": request.email})
+        if existing_email:
+            raise HTTPException(status_code=400, detail="Driver already exists with this email")
+        
+        # Determine coordinates
+        latitude = request.latitude
+        longitude = request.longitude
+        location_info = None
+        
+        # If coordinates are not provided, try to detect from address
+        if latitude is None or longitude is None:
+            location_data = find_coordinates_by_address(request.address)
+            if location_data:
+                latitude = location_data["latitude"]
+                longitude = location_data["longitude"]
+                location_info = {
+                    "detected_district": location_data["district"],
+                    "match_type": location_data["match_type"],
+                    "matched_term": location_data["matched_term"],
+                    "auto_detected": True
+                }
+                if "matched_alias" in location_data:
+                    location_info["matched_alias"] = location_data["matched_alias"]
+            else:
+                # Could not detect location from address
+                raise HTTPException(
+                    status_code=400, 
+                    detail={
+                        "error": "Could not determine location from address",
+                        "message": "Please provide latitude and longitude coordinates, or include a valid Sri Lankan district/city in your address",
+                        "available_districts": get_all_districts()[:10],  # Show first 10 as example
+                        "total_districts": len(get_all_districts()),
+                        "suggestion": "Include districts like Colombo, Kandy, Galle, etc. in your address for automatic detection"
+                    }
+                )
+        else:
+            # Coordinates provided manually
+            location_info = {"auto_detected": False, "coordinates_provided": "manual"}
+        
+        # Generate unique driver ID
+        def generate_driver_id():
+            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+            import random
+            random_suffix = random.randint(100, 999)
+            return f"D{timestamp[-6:]}{random_suffix}"
+        
+        # Create driver document
+        driver_data = {
+            "firebaseUID": request.firebaseUID,
+            "name": request.name,
+            "email": request.email,
+            "role": "driver",
+            "driver_id": generate_driver_id(),
+            "phone": request.phone,
+            "current_location": {
+                "address": request.address,
+                "latitude": latitude,
+                "longitude": longitude
+            },
+            "status": "available",
+            "assigned_orders": [],
+            "completed_orders": [],
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        # Insert driver into MongoDB
+        result = await drivers_collection.insert_one(driver_data)
+        
+        # Get the inserted driver
+        new_driver = await drivers_collection.find_one({"_id": result.inserted_id})
+        
+        # Convert ObjectId to string for JSON response
+        new_driver["_id"] = str(new_driver["_id"])
+        
+        response = {
+            "message": "Driver registered successfully",
+            "driver": new_driver
+        }
+        
+        # Add location detection info if available
+        if location_info:
+            response["location_detection"] = location_info
+            
+        return response
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error registering driver: {str(e)}")
 
 @app.post("/orders/accept")
 async def accept_order(request: OrderAcceptRequest):
@@ -521,10 +722,10 @@ async def mark_order_delivered(request: OrderDeliveryRequest):
     # Check if order is assigned to this driver
     if order.get("driver_id") != driver_id:
         raise HTTPException(status_code=400, detail=f"Order {order_id} is not assigned to driver {driver_id}")
-    
-    # Check if order is in accepted status
-    if order["status"] != "accepted":
-        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in accepted status. Current status: {order['status']}")
+
+    # Check if order is in on_delivery status
+    if order["status"] != "on_delivery":
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in on_delivery status. Current status: {order['status']}")
     
     # Update order status to delivered
     update_data = {

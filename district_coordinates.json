@@ -1,0 +1,179 @@
+{
+  "districts": {
+    "Colombo": {
+      "latitude": 6.9271,
+      "longitude": 79.8612,
+      "aliases": ["colombo", "col", "cmb"]
+    },
+    "Gampaha": {
+      "latitude": 7.0906,
+      "longitude": 79.9956,
+      "aliases": ["gampaha", "gmp"]
+    },
+    "Kalutara": {
+      "latitude": 6.5854,
+      "longitude": 79.9607,
+      "aliases": ["kalutara", "kal"]
+    },
+    "Kandy": {
+      "latitude": 7.2906,
+      "longitude": 80.6337,
+      "aliases": ["kandy", "knd", "mahanuwara"]
+    },
+    "Matale": {
+      "latitude": 7.4675,
+      "longitude": 80.6234,
+      "aliases": ["matale", "mtl"]
+    },
+    "Nuwara Eliya": {
+      "latitude": 6.9497,
+      "longitude": 80.7891,
+      "aliases": ["nuwara eliya", "nuwara", "eliya", "nuwaraeliya", "ne"]
+    },
+    "Galle": {
+      "latitude": 6.0329,
+      "longitude": 80.217,
+      "aliases": ["galle", "gll"]
+    },
+    "Matara": {
+      "latitude": 5.9549,
+      "longitude": 80.5550,
+      "aliases": ["matara", "mtr"]
+    },
+    "Hambantota": {
+      "latitude": 6.1241,
+      "longitude": 81.1185,
+      "aliases": ["hambantota", "hbt"]
+    },
+    "Jaffna": {
+      "latitude": 9.6615,
+      "longitude": 80.0255,
+      "aliases": ["jaffna", "jfn", "yalpanam"]
+    },
+    "Kilinochchi": {
+      "latitude": 9.3961,
+      "longitude": 80.4037,
+      "aliases": ["kilinochchi", "kln"]
+    },
+    "Mannar": {
+      "latitude": 8.9814,
+      "longitude": 79.9037,
+      "aliases": ["mannar", "mnr"]
+    },
+    "Mullaitivu": {
+      "latitude": 9.2673,
+      "longitude": 80.8142,
+      "aliases": ["mullaitivu", "mlt"]
+    },
+    "Vavuniya": {
+      "latitude": 8.7514,
+      "longitude": 80.4971,
+      "aliases": ["vavuniya", "vvn"]
+    },
+    "Puttalam": {
+      "latitude": 8.0362,
+      "longitude": 79.8283,
+      "aliases": ["puttalam", "ptl"]
+    },
+    "Kurunegala": {
+      "latitude": 7.4863,
+      "longitude": 80.3623,
+      "aliases": ["kurunegala", "krg"]
+    },
+    "Anuradhapura": {
+      "latitude": 8.3114,
+      "longitude": 80.4037,
+      "aliases": ["anuradhapura", "anp", "anuradhapuraya"]
+    },
+    "Polonnaruwa": {
+      "latitude": 7.9403,
+      "longitude": 81.0188,
+      "aliases": ["polonnaruwa", "pol"]
+    },
+    "Badulla": {
+      "latitude": 6.9934,
+      "longitude": 81.0550,
+      "aliases": ["badulla", "bdl"]
+    },
+    "Moneragala": {
+      "latitude": 6.8714,
+      "longitude": 81.3510,
+      "aliases": ["moneragala", "mng"]
+    },
+    "Ratnapura": {
+      "latitude": 6.6828,
+      "longitude": 80.4034,
+      "aliases": ["ratnapura", "rtp", "gem city"]
+    },
+    "Kegalle": {
+      "latitude": 7.2513,
+      "longitude": 80.3464,
+      "aliases": ["kegalle", "kgl"]
+    },
+    "Batticaloa": {
+      "latitude": 7.7102,
+      "longitude": 81.6924,
+      "aliases": ["batticaloa", "btc"]
+    },
+    "Ampara": {
+      "latitude": 7.2976,
+      "longitude": 81.6747,
+      "aliases": ["ampara", "amp"]
+    },
+    "Trincomalee": {
+      "latitude": 8.5778,
+      "longitude": 81.2335,
+      "aliases": ["trincomalee", "tcm", "trinco"]
+    },
+    "Negombo": {
+      "latitude": 7.2083,
+      "longitude": 79.8358,
+      "aliases": ["negombo", "ngb"]
+    },
+    "Panadura": {
+      "latitude": 6.7132,
+      "longitude": 79.9026,
+      "aliases": ["panadura", "pnd"]
+    },
+    "Moratuwa": {
+      "latitude": 6.7730,
+      "longitude": 79.8816,
+      "aliases": ["moratuwa", "mrt"]
+    },
+    "Dehiwala": {
+      "latitude": 6.8561,
+      "longitude": 79.8630,
+      "aliases": ["dehiwala", "dhw", "dehiwala mount lavinia"]
+    },
+    "Mount Lavinia": {
+      "latitude": 6.8421,
+      "longitude": 79.8631,
+      "aliases": ["mount lavinia", "ml", "lavinia"]
+    },
+    "Kotte": {
+      "latitude": 6.8905,
+      "longitude": 79.9015,
+      "aliases": ["kotte", "sri jayawardenepura", "jayawardenepura"]
+    },
+    "Maharagama": {
+      "latitude": 6.8480,
+      "longitude": 79.9267,
+      "aliases": ["maharagama", "mhg"]
+    },
+    "Kesbewa": {
+      "latitude": 6.8132,
+      "longitude": 79.9267,
+      "aliases": ["kesbewa", "ksb"]
+    },
+    "Homagama": {
+      "latitude": 6.8444,
+      "longitude": 80.0024,
+      "aliases": ["homagama", "hmg"]
+    },
+    "Kaduwela": {
+      "latitude": 6.9333,
+      "longitude": 79.9833,
+      "aliases": ["kaduwela", "kdw"]
+    }
+  }
+}
