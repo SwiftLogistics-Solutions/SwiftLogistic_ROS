@@ -110,6 +110,7 @@ class CreateOrderRequest(BaseModel):
     priority: str
     driver_id: str = None
     status: str = "ready-to-deliver"
+    totalAmount: float = None
 
 # Load environment variables
 load_dotenv()
@@ -410,6 +411,7 @@ async def create_order(request: CreateOrderRequest):
             "order_id": request.order_id,
             "customer_name": request.customer_name,
             "customer_phone": request.customer_phone,
+            "totalAmount": request.totalAmount,
             "delivery_address": {
                 "address": request.delivery_address.address,
                 "latitude": request.delivery_address.latitude,
@@ -420,6 +422,10 @@ async def create_order(request: CreateOrderRequest):
             "created_at": datetime.utcnow(),
             "updated_at": datetime.utcnow()
         }
+        
+        # Add totalAmount if provided
+        if request.totalAmount is not None:
+            order_data["totalAmount"] = request.totalAmount
         
         # Add driver_id if provided
         if request.driver_id:
@@ -693,6 +699,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
                     "order_id": order["order_id"],
                     "customer_name": order["customer_name"],
                     "customer_phone": order["customer_phone"],
+                    "totalAmount": order.get("totalAmount", 0.0),
                     "priority": order["priority"],
                     "status": order["status"],
                     "coordinates": {"latitude": coords[0], "longitude": coords[1]},
@@ -711,6 +718,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
                     "customer_phone": order["customer_phone"],
                     "priority": order["priority"],
                     "status": order["status"],
+                    "totalAmount": order.get("totalAmount", 0.0),
                     "coordinates": {"latitude": coords[0], "longitude": coords[1]},
                     "distance_from_previous": round(distance, 2),
                     "priority_weight_applied": "Yes" if order["priority"] == "high" else "No"
@@ -726,6 +734,7 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
         "driver_name": driver["name"],
         "total_orders": len(driver_orders),
         "orders_to_pickup": len(orders_to_pickup),
+        "totalAmount":order.get("totalAmount", 0.0),
         "orders_on_delivery": len(orders_on_delivery),
         "warehouse_visit_required": len(orders_to_pickup) > 0,
         "total_distance_km": round(total_distance, 2),
