@@ -97,6 +97,20 @@ class DriverSignupRequest(BaseModel):
     latitude: float = None
     longitude: float = None
 
+class DeliveryAddress(BaseModel):
+    address: str
+    latitude: float
+    longitude: float
+
+class CreateOrderRequest(BaseModel):
+    order_id: str
+    customer_name: str
+    customer_phone: str
+    delivery_address: DeliveryAddress
+    priority: str
+    driver_id: str = None
+    status: str = "ready-to-deliver"
+
 # Load environment variables
 load_dotenv()
 
@@ -372,6 +386,74 @@ async def get_districts():
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error fetching districts: {str(e)}")
 
+@app.post("/orders/ready-to-deliver")
+async def create_order(request: CreateOrderRequest):
+    """Create a new order ready for delivery"""
+    try:
+        # Check if order ID already exists
+        existing_order = await orders_collection.find_one({"order_id": request.order_id})
+        if existing_order:
+            raise HTTPException(status_code=400, detail=f"Order with ID {request.order_id} already exists")
+        
+        # Validate priority
+        if request.priority not in ["high", "low"]:
+            raise HTTPException(status_code=400, detail="Priority must be either 'high' or 'low'")
+        
+        # If driver_id is provided, check if driver exists
+        if request.driver_id:
+            driver = await drivers_collection.find_one({"driver_id": request.driver_id})
+            if not driver:
+                raise HTTPException(status_code=404, detail=f"Driver {request.driver_id} not found")
+        
+        # Create order document
+        order_data = {
+            "order_id": request.order_id,
+            "customer_name": request.customer_name,
+            "customer_phone": request.customer_phone,
+            "delivery_address": {
+                "address": request.delivery_address.address,
+                "latitude": request.delivery_address.latitude,
+                "longitude": request.delivery_address.longitude
+            },
+            "priority": request.priority,
+            "status": request.status,
+            "created_at": datetime.utcnow(),
+            "updated_at": datetime.utcnow()
+        }
+        
+        # Add driver_id if provided
+        if request.driver_id:
+            order_data["driver_id"] = request.driver_id
+            
+            # If order is assigned to a driver, add it to driver's assignments
+            await drivers_collection.update_one(
+                {"driver_id": request.driver_id},
+                {"$addToSet": {"assigned_orders": request.order_id}}
+            )
+        
+        # Insert order into MongoDB
+        result = await orders_collection.insert_one(order_data)
+        
+        # Get the inserted order
+        new_order = await orders_collection.find_one({"_id": result.inserted_id})
+        
+        # Convert ObjectId to string for JSON response
+        new_order["_id"] = str(new_order["_id"])
+        
+        # Convert datetime objects to ISO format strings
+        new_order["created_at"] = new_order["created_at"].isoformat()
+        new_order["updated_at"] = new_order["updated_at"].isoformat()
+        
+        return {
+            "message": "Order created successfully",
+            "order": new_order
+        }
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error creating order: {str(e)}")
+
 @app.post("/drivers/signup")
 async def driver_signup(request: DriverSignupRequest):
     """Register a new driver in MongoDB after Firebase authentication"""
@@ -421,12 +503,12 @@ async def driver_signup(request: DriverSignupRequest):
             # Coordinates provided manually
             location_info = {"auto_detected": False, "coordinates_provided": "manual"}
         
-        # Generate unique driver ID
-        def generate_driver_id():
-            timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
-            import random
-            random_suffix = random.randint(100, 999)
-            return f"D{timestamp[-6:]}{random_suffix}"
+        # # Generate unique driver ID
+        # def generate_driver_id():
+        #     timestamp = datetime.now().strftime("%Y%m%d%H%M%S")
+        #     import random
+        #     random_suffix = random.randint(100, 999)
+        #     return f"D{timestamp[-6:]}{random_suffix}"
         
         # Create driver document
         driver_data = {
@@ -434,7 +516,7 @@ async def driver_signup(request: DriverSignupRequest):
             "name": request.name,
             "email": request.email,
             "role": "driver",
-            "driver_id": generate_driver_id(),
+            "driver_id": request.firebaseUID,
             "phone": request.phone,
             "current_location": {
                 "address": request.address,
@@ -490,7 +572,7 @@ async def accept_order(request: OrderAcceptRequest):
         raise HTTPException(status_code=404, detail=f"Driver {driver_id} not found")
     
     # Check if order is already assigned
-    if order["status"] != "pending":
+    if order["status"] != "ready-to-deliver":
         raise HTTPException(status_code=400, detail=f"Order {order_id} is already {order['status']}")
     
     # Update order status and assign to driver
@@ -768,3 +850,46 @@ async def mark_order_delivered(request: OrderDeliveryRequest):
         },
         "driver": driver["name"]
     }
+
+@app.delete("/orders/{order_id}")
+async def remove_order(order_id: str = Path(..., description="Order ID to remove")):
+    """Remove an order from the system"""
+    try:
+        # Check if order exists
+        order = await orders_collection.find_one({"order_id": order_id})
+        if not order:
+            raise HTTPException(status_code=404, detail=f"Order {order_id} not found")
+        
+        # If order is assigned to a driver, remove it from driver's assignments
+        if order.get("driver_id"):
+            driver_id = order["driver_id"]
+            
+            # Remove from assigned_orders and completed_orders
+            await drivers_collection.update_one(
+                {"driver_id": driver_id},
+                {
+                    "$pull": {
+                        "assigned_orders": order_id,
+                        "completed_orders": order_id
+                    }
+                }
+            )
+        
+        # Delete the order from orders collection
+        delete_result = await orders_collection.delete_one({"order_id": order_id})
+        
+        if delete_result.deleted_count == 1:
+            return {
+                "message": f"Order {order_id} successfully removed from the system",
+                "order_id": order_id,
+                "was_assigned_to_driver": bool(order.get("driver_id")),
+                "driver_id": order.get("driver_id"),
+                "order_status": order.get("status")
+            }
+        else:
+            raise HTTPException(status_code=500, detail=f"Failed to remove order {order_id}")
+            
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Error removing order: {str(e)}")
