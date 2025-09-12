@@ -618,16 +618,16 @@ async def optimize_route(driver_id: str = Path(..., description="Driver ID to op
     if not driver:
         return {"error": "Driver not found", "driver_id": driver_id}
     
-    # Get orders assigned to this driver (accepted or on_delivery)
+    # Get orders assigned to this driver (accepted or on-delivery)
     driver_orders_cursor = orders_collection.find({
         "driver_id": driver_id,
-        "status": {"$in": ["accepted", "on_delivery"]}
+        "status": {"$in": ["accepted", "on-delivery"]}
     })
     all_driver_orders = await driver_orders_cursor.to_list(length=None)
     
     # Separate orders by status
     orders_to_pickup = [order for order in all_driver_orders if order["status"] == "accepted"]
-    orders_on_delivery = [order for order in all_driver_orders if order["status"] == "on_delivery"]
+    orders_on_delivery = [order for order in all_driver_orders if order["status"] == "on-delivery"]
     
     if not all_driver_orders:
         return {
@@ -770,7 +770,7 @@ async def mark_order_on_delivery(request: OrderOnDeliveryRequest):
     await orders_collection.update_one(
         {"order_id": order_id},
         {"$set": {
-            "status": "on_delivery",
+            "status": "on-delivery",
             "picked_up_at": datetime.utcnow(),
             "picked_up_by": driver_id
         }}
@@ -814,9 +814,9 @@ async def mark_order_delivered(request: OrderDeliveryRequest):
     if order.get("driver_id") != driver_id:
         raise HTTPException(status_code=400, detail=f"Order {order_id} is not assigned to driver {driver_id}")
 
-    # Check if order is in on_delivery status
-    if order["status"] != "on_delivery":
-        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in on_delivery status. Current status: {order['status']}")
+    # Check if order is in on-delivery status
+    if order["status"] != "on-delivery":
+        raise HTTPException(status_code=400, detail=f"Order {order_id} is not in on-delivery status. Current status: {order['status']}")
     
     # Update order status to delivered
     update_data = {
