@@ -173,18 +173,10 @@ def calculate_weighted_distance(physical_distance, priority, priority_weight=0.7
     Calculate weighted distance considering priority
     High priority orders get lower weights (more attractive routes)
     """
-    priority_multipliers = {
-        "high": 0.5,  # High priority = 50% weight (shorter weighted distance)
-        "low": 1.0    # Low priority = 100% weight (normal weighted distance)
-    }
-    
-    priority_factor = priority_multipliers.get(priority, 1.0)
-    distance_factor = 1 - priority_weight
-    
-    # Weighted distance = (physical_distance * distance_weight) + (physical_distance * priority_factor * priority_weight)
-    weighted_distance = (physical_distance * distance_factor) + (physical_distance * priority_factor * priority_weight)
-    
-    return weighted_distance
+    if priority == "high":
+        return physical_distance * 0.5
+    else:
+        return physical_distance * 1.0
 
 def dijkstra_shortest_path(graph, start_node, target_nodes):
     """
@@ -286,7 +278,7 @@ def build_weighted_graph(driver_orders, driver_location, wms_location):
 
 def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, orders_to_pickup=None):
     """
-    Use Dijkstra's algorithm to find optimal delivery route
+    Use Dijkstra's algorithm to find optimal delivery route with proper priority consideration
     Route: Driver Location → [WMS (pickup orders if any)] → Optimized deliveries → [Return to WMS if pickup was done]
     """
     if not driver_orders:
@@ -313,7 +305,7 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, o
         total_physical_distance += pickup_distance
         current_node = 'wms'
     
-    # Now optimize delivery sequence using Dijkstra's
+    # Now optimize delivery sequence using Dijkstra's with proper priority consideration
     unvisited_orders = [order["order_id"] for order in driver_orders]
     
     # Visit orders using Dijkstra's to find best next order each time
@@ -322,14 +314,38 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, o
         paths_result = dijkstra_shortest_path(graph, current_node, unvisited_orders)
         
         # Choose the order with minimum weighted distance
+        # If distances are equal, prioritize high priority orders
         best_order = None
         min_distance = float('infinity')
+        best_priority = None
         
         for order_id, (distance, path) in paths_result.items():
+            # Get order priority
+            order = next(o for o in driver_orders if o["order_id"] == order_id)
+            order_priority = order["priority"]
+            
+            # Choose based on weighted distance first, then priority as tiebreaker
+            is_better = False
+            
             if distance < min_distance:
+                is_better = True
+            elif distance == min_distance:
+                # Same distance - prefer high priority
+                if order_priority == "high" and best_priority != "high":
+                    is_better = True
+                elif order_priority == "high" and best_priority == "high":
+                    # Both high priority, keep current (first found)
+                    is_better = False
+                elif order_priority == "low" and best_priority == "low":
+                    # Both low priority, keep current (first found)  
+                    is_better = False
+                # If current is low and best is high, don't change
+            
+            if is_better:
                 min_distance = distance
                 best_order = order_id
-        
+                best_priority = order_priority
+
         if best_order:
             route.append(best_order)
             total_weighted_distance += min_distance
@@ -343,13 +359,93 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, o
             current_node = best_order
             unvisited_orders.remove(best_order)
     
-    # Return to WMS only if we went there for pickup
-    if need_pickup and current_node != 'wms':
+    # Always return to WMS if there was at least one order
+    if driver_orders and current_node != 'wms':
         route.append('wms')
         weight = graph[current_node]['wms']
         total_weighted_distance += weight
         
         # Calculate physical distance back to WMS
+        lat1, lng1 = locations[current_node]
+        lat2, lng2 = locations['wms']
+        physical_dist = calculate_distance(lat1, lng1, lat2, lng2)
+        total_physical_distance += physical_dist
+    
+    return route, total_physical_distance, locations
+
+# Alternative approach: Sort orders by priority and weighted distance before routing
+def optimize_route_with_priority_first(driver_orders, driver_location, wms_location, orders_to_pickup=None):
+    """
+    Alternative approach: Sort orders by priority first, then optimize within priority groups
+    """
+    if not driver_orders:
+        return [], 0, []
+    
+    # Separate orders by priority
+    high_priority_orders = [o for o in driver_orders if o["priority"] == "high"]
+    low_priority_orders = [o for o in driver_orders if o["priority"] == "low"]
+    
+    # Build locations map
+    locations = {}
+    locations['wms'] = (wms_location["latitude"], wms_location["longitude"])
+    locations['driver'] = (driver_location["latitude"], driver_location["longitude"])
+    
+    for order in driver_orders:
+        locations[order["order_id"]] = (
+            order["delivery_address"]["latitude"],
+            order["delivery_address"]["longitude"]
+        )
+    
+    route = ['driver']
+    total_physical_distance = 0
+    current_node = 'driver'
+    
+    # Go to WMS if needed
+    need_pickup = orders_to_pickup and len(orders_to_pickup) > 0
+    if need_pickup:
+        route.append('wms')
+        lat1, lng1 = locations['driver']
+        lat2, lng2 = locations['wms']
+        pickup_distance = calculate_distance(lat1, lng1, lat2, lng2)
+        total_physical_distance += pickup_distance
+        current_node = 'wms'
+    
+    # Process high priority orders first using nearest neighbor within priority group
+    def process_orders_nearest_neighbor(orders_to_process, start_node):
+        nonlocal route, total_physical_distance, current_node
+        unvisited = [o["order_id"] for o in orders_to_process]
+        
+        while unvisited:
+            # Find nearest unvisited order
+            min_distance = float('infinity')
+            nearest_order = None
+            
+            for order_id in unvisited:
+                lat1, lng1 = locations[current_node]
+                lat2, lng2 = locations[order_id]
+                distance = calculate_distance(lat1, lng1, lat2, lng2)
+                
+                if distance < min_distance:
+                    min_distance = distance
+                    nearest_order = order_id
+            
+            if nearest_order:
+                route.append(nearest_order)
+                total_physical_distance += min_distance
+                current_node = nearest_order
+                unvisited.remove(nearest_order)
+    
+    # Process high priority orders first
+    if high_priority_orders:
+        process_orders_nearest_neighbor(high_priority_orders, current_node)
+    
+    # Then process low priority orders
+    if low_priority_orders:
+        process_orders_nearest_neighbor(low_priority_orders, current_node)
+    
+    # Return to WMS
+    if driver_orders and current_node != 'wms':
+        route.append('wms')
         lat1, lng1 = locations[current_node]
         lat2, lng2 = locations['wms']
         physical_dist = calculate_distance(lat1, lng1, lat2, lng2)
