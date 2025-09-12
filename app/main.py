@@ -343,8 +343,8 @@ def optimize_route_with_dijkstra(driver_orders, driver_location, wms_location, o
             current_node = best_order
             unvisited_orders.remove(best_order)
     
-    # Return to WMS only if we went there for pickup
-    if need_pickup and current_node != 'wms':
+    # Always return to WMS if there was at least one order
+    if driver_orders and current_node != 'wms':
         route.append('wms')
         weight = graph[current_node]['wms']
         total_weighted_distance += weight
